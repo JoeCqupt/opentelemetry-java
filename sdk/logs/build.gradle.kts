@@ -1,3 +1,5 @@
+import aQute.bnd.gradle.BundleTaskExtension
+
 plugins {
   id("otel.java-conventions")
   id("otel.publish-conventions")
@@ -11,10 +13,26 @@ otelJava.moduleName.set("io.opentelemetry.sdk.logs")
 otelJava.requireSuppressWarningsExplanation.set(false)
 otelJava.osgiOptionalPackages.set(listOf("io.opentelemetry.api.incubator"))
 
+sourceSets {
+  main {
+    val logsShadedDeps = project(":sdk:logs-shaded-deps")
+    output.dir(logsShadedDeps.file("build/extracted/shadow"), "builtBy" to ":sdk:logs-shaded-deps:extractShadowJar")
+  }
+}
+
+afterEvaluate {
+  tasks.jar {
+    extensions.configure<BundleTaskExtension> {
+      bnd("-exportcontents: !io.opentelemetry.sdk.logs.internal.shaded.jctools.*,io.opentelemetry.*")
+    }
+  }
+}
+
 dependencies {
   api(project(":api:all"))
   api(project(":sdk:common"))
   compileOnly(project(":api:incubator"))
+  compileOnly(project(":sdk:logs-shaded-deps"))
 
   annotationProcessor("com.google.auto.value:auto-value")
 

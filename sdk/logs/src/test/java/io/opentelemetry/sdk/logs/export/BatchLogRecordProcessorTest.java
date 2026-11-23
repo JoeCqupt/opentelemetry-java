@@ -279,7 +279,8 @@ class BatchLogRecordProcessorTest {
 
   @Test
   void emitMoreLogsThanTheMaximumLimit() {
-    int maxQueuedLogs = 8;
+    // JCTools allocates an internal capacity of 8, but the configured limit is 7.
+    int maxQueuedLogs = 7;
     BlockingLogRecordExporter blockingLogRecordExporter = new BlockingLogRecordExporter();
     WaitingLogRecordExporter waitingLogRecordExporter =
         new WaitingLogRecordExporter(maxQueuedLogs, CompletableResultCode.ofSuccess());
@@ -314,21 +315,16 @@ class BatchLogRecordProcessorTest {
     // Release the blocking exporter
     blockingLogRecordExporter.unblock();
 
-    // While we wait for maxQueuedLogs we ensure that the queue is also empty after this.
-    List<LogRecordData> exported = waitingLogRecordExporter.waitForExport();
-    assertThat(exported).isNotNull();
-    assertThat(exported).hasSize(maxQueuedLogs + 1);
+    assertThat(sdkTracerProvider.forceFlush().join(10, TimeUnit.SECONDS).isSuccess()).isTrue();
+    assertThat(waitingLogRecordExporter.getExported()).hasSize(maxQueuedLogs + 1);
 
-    // Clear, reset, add another batch of logs, and confirm they are exported
-    exported.clear();
-    waitingLogRecordExporter.reset();
+    // Add another batch of logs and confirm the freed queue slots can be reused.
     for (int i = 0; i < maxQueuedLogs; i++) {
       emitLog(sdkTracerProvider, "log_3_" + i);
     }
 
-    exported = waitingLogRecordExporter.waitForExport();
-    assertThat(exported).isNotNull();
-    assertThat(exported).hasSize(maxQueuedLogs);
+    assertThat(sdkTracerProvider.forceFlush().join(10, TimeUnit.SECONDS).isSuccess()).isTrue();
+    assertThat(waitingLogRecordExporter.getExported()).hasSize(maxQueuedLogs);
   }
 
   @Test

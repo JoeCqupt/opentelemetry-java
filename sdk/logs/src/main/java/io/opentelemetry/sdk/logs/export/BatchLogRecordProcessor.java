@@ -15,6 +15,7 @@ import io.opentelemetry.sdk.common.internal.ThrowableUtil;
 import io.opentelemetry.sdk.logs.LogRecordProcessor;
 import io.opentelemetry.sdk.logs.ReadWriteLogRecord;
 import io.opentelemetry.sdk.logs.data.LogRecordData;
+import io.opentelemetry.sdk.logs.internal.JcTools;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -33,10 +34,10 @@ import java.util.logging.Logger;
  * Implementation of the {@link LogRecordProcessor} that batches logs exported by the SDK then
  * pushes them to the exporter pipeline.
  *
- * <p>All logs reported by the SDK implementation are first added to a synchronized queue (with a
- * {@code maxQueueSize} maximum size, if queue is full logs are dropped). Logs are exported either
- * when there are {@code maxExportBatchSize} pending logs or {@code scheduleDelayNanos} has passed
- * since the last export finished.
+ * <p>All logs reported by the SDK implementation are first added to a bounded queue (with a {@code
+ * maxQueueSize} maximum size, if queue is full logs are dropped). Logs are exported either when
+ * there are {@code maxExportBatchSize} pending logs or {@code scheduleDelayNanos} has passed since
+ * the last export finished.
  *
  * @since 1.27.0
  */
@@ -77,8 +78,8 @@ public final class BatchLogRecordProcessor implements LogRecordProcessor {
             scheduleDelayNanos,
             maxExportBatchSize,
             exporterTimeoutNanos,
-            new ArrayBlockingQueue<>(maxQueueSize),
-            maxQueueSize); // TODO: use JcTools.newFixedSizeQueue(..)
+            JcTools.newFixedSizeQueue(maxQueueSize),
+            maxQueueSize);
     Thread workerThread = new DaemonThreadFactory(WORKER_THREAD_NAME).newThread(worker);
     workerThread.start();
   }
@@ -158,7 +159,7 @@ public final class BatchLogRecordProcessor implements LogRecordProcessor {
     private final AtomicBoolean isShutdown = new AtomicBoolean(false);
     private volatile boolean continueWork = true;
     private final ArrayList<LogRecordData> batch;
-    private final long maxQueueSize;
+    private final int maxQueueSize;
 
     private Worker(
         LogRecordExporter logRecordExporter,
@@ -168,7 +169,7 @@ public final class BatchLogRecordProcessor implements LogRecordProcessor {
         int maxExportBatchSize,
         long exporterTimeoutNanos,
         Queue<ReadWriteLogRecord> queue,
-        long maxQueueSize) {
+        int maxQueueSize) {
       this.logRecordExporter = logRecordExporter;
       this.scheduleDelayNanos = scheduleDelayNanos;
       this.maxExportBatchSize = maxExportBatchSize;
@@ -188,7 +189,7 @@ public final class BatchLogRecordProcessor implements LogRecordProcessor {
         return;
       }
       logProcessorInstrumentation.buildQueueMetricsOnce(maxQueueSize, queue::size);
-      if (!queue.offer(logData)) {
+      if (!JcTools.offerIfBelowThreshold(queue, logData, maxQueueSize)) {
         logProcessorInstrumentation.dropLogsQueueFull(1);
       } else {
         if (queue.size() >= logsNeeded.get()) {
